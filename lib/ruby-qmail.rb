@@ -1,0 +1,5 @@
+require File.dirname(__FILE__) + "/netstring"
+require File.dirname(__FILE__) + "/qmqpc"
+# require File.dirname(__FILE__) + "/"
+# require File.dirname(__FILE__) + "/"
+# require File.dirname(__FILE__) + "/"
