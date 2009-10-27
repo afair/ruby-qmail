@@ -1,6 +1,9 @@
 = ruby-qmail
 
-Description goes here.
+The RubyQmail Plugin provides support for the Qmail MTA and helpers for creating data-aware applications
+While initially intended to operate in a large-scale Qmail environment, some of these features may be useful for
+applications on other platforms. In fact, this plugin is not required if you are using Qmail because
+ActionMailer's sendmail and smtp configurations will work for simple Qmail installations.
 
 == Note on Patches/Pull Requests
  
