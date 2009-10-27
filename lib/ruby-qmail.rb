@@ -1,5 +1,6 @@
 require File.dirname(__FILE__) + "/netstring"
-require File.dirname(__FILE__) + "/qmqpc"
+require File.dirname(__FILE__) + "/config"
+require File.dirname(__FILE__) + "/queue"
 # require File.dirname(__FILE__) + "/"
 # require File.dirname(__FILE__) + "/"
 # require File.dirname(__FILE__) + "/"

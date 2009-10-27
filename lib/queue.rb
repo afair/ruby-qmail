@@ -1,9 +1,7 @@
 module RubyQmail
   
-  # The "qmail-queue" protocol base class, from which multiple methods can derived (queue, qmqpc, etc.) This
-  # protocol is chainable, the output of one can be input into another until the last one in the chain, where
-  # the email is deposited into the mail queue.
   class Queue
+    include Process
     attr_accessor( :return_path, :message, :recipients, :options, :response, :success )
     QMAIL_QUEUE_SUCCESS = 0
     QMAIL_ERRORS = {
@@ -38,37 +36,41 @@ module RubyQmail
     
     # Recipients can be a filename, array or other object that responds to :each, or #to_s resolves to an email address
     # Message can be a filename, string, or other object that responds to :each
-    def initialize(return_path, recipients, message, *options)
+    def initialize(return_path=nil, recipients=nil, message=nil, *options)
       parameters(return_path, recipients, message, options)
     end
       
     def parameters(return_path, recipients, message, options) #:nodoc:
-      @return_path ||= return_path
-      @options     = RubyQmail::Config.load_file(RUBY_QMAIL_CONFIG, options.last || {})
-      @recipients  ||= recipients
+      @return_path = return_path if return_path
+      @options     = RubyQmail::Config.load_file( nil, options.last || {})
+      @recipients  = recipients if recipients
       @recipients  = File.new(@recipients) if @recipients.is_a?(String) && File.exists?(@recipients)
       @recipients  = [ @recipients.to_s ] unless @recipients.respond_to?(:each)
-      @message     ||= message
+      @message     = message if message
       @message     = File.new(@message) if @message.is_a?(String) && File.exists?(@message)
-      @message     = @message.to_s.split(/\n/) unless @message.respond_to?(:each)      
+      @message     = @message.split(/\n/) if @message.is_a?(String)
     end
     
     # This calls the Qmail-Queue program, so requires qmail to be installed (does not require it to be currently running).
-    def qmail_queue(return_path=nil, recipients=nil, message=nil, *options)
+    def queue(return_path=nil, recipients=nil, message=nil, *options)
       parameters(return_path, recipients, message, options)
       @success = run_qmail_queue() do |msg, env|
         # Send the Message
+        # @message.each { |m| puts("MSG: #{m}") }
         @message.each { |m| msg.puts(m) }
+        msg.close
 
         # Send the Envelope. Return paths ending with -@[] flag qmail to use VERP.
-        @return_path += '-@[]' unless @options[:noverp] || @return_path.matches?(/-@\[\]$/) # VERP-ify
+        @return_path += '-@[]' unless @options.has_key?(:noverp) || @return_path.match(/-@\[\]$/) # VERP-ify
         env.write('F' + @return_path + "\0")
+        # puts('ENV: F' + @return_path + "0")
+        # @recipients.each { |r| puts('ENV: T' + r + "0") }      
         @recipients.each { |r| env.write('T' + r + "\0") }      
         env.write("\0") # End of "file"
       end
-      @options[:logger].info("RubyQmail Queue exited:#{@success} #{self.qmail_queue_error_message(@success)}")
-      return @success = true if @success == QMAIL_QUEUE_SUCCESS
-      raise self.qmail_queue_error_message(@success)
+      @options[:logger].info("RubyQmail Queue exited:#{@success} #{Queue.qmail_queue_error_message(@success)}")
+      return true if @success == QMAIL_QUEUE_SUCCESS
+      raise Queue.qmail_queue_error_message(@success)
     end
     
     # Maps the qmail-queue exit code to the error message
@@ -80,22 +82,24 @@ module RubyQmail
     # This implemtents the QMQP protocol, so does not need Qmail installed on the host system.
     # System defaults will be used if no ip or port given.
     # Returns true on success, false on failure (see @response), or nul on deferral
-    def qmail_qmqpc(return_path=nil, recipients=nil, message=nil, *options)
+    def qmqp(return_path=nil, recipients=nil, message=nil, *options)
       parameters(return_path, recipients, message, options)
       
-      begin
+#     begin
         ip = @options[:ip] || File.readlines(QMQP_SERVERS).first.chomp
-        socket = TCPSocket.new(ip, @options[:qmqp_port])
+        puts "CONNECT #{@options[:ip]}, #{@options[:qmqp_port]}"
+        socket = TCPSocket.new(@options[:ip], @options[:qmqp_port])
         raise "QMQP can not connect to #{@opt[:qmqp_ip]}:#{@options[:qmqp_port]}" unless socket
         
         nstr = @message.each { |m| m }.join("\t").to_netstring
         nstr += "F#{@return_path}".to_netstring
-        nstr = @recipients.each { |r| "T#{@return_path}".to_netstring }.join
-        socket.send( nstr.to_netstring )
+        nstr += @recipients.each { |r| "T#{r}".to_netstring }.join
+        socket.send( nstr.to_netstring, 0 )
+        puts( nstr.to_netstring )
 
         @response = socket.recv(1000) # "23:Kok 1182362995 qp 21894,"
         socket.close
-        @options[:logger].info("RubyQmail QMQP [#{@opt[:qmqp_ip]}:#{@options[:qmqp_port]}]: #{@response}")
+        @options[:logger].info("RubyQmail QMQP [#{@options[:qmqp_ip]}:#{@options[:qmqp_port]}]: #{@response}")
         
         if @response =~ /^\d+:([KZD])(.+),$/
           @options[:logger].debug("QMQP #{@return_path} to #{@recipient_count} recipients including #{@last_recipient}: #{$1+$2}")
@@ -104,125 +108,133 @@ module RubyQmail
           when 'K' : true  # success
           when 'Z' : nil   # deferral
           when 'D' : false # failure
+          else false
         end
-        @options[:logger].info("RubyQmail QMQP from:#{@return_path} exited:#{@success} responded:#{resppnse}")
-      rescue e
-        @options[:logger].error("RubyQmail QMQP exception #{e}")
-        raise e
-      ensure
-        socket.close if socket
+        @options[:logger].info("RubyQmail QMQP from:#{@return_path} exited:#{@success} responded:#{response}")
+        puts("RubyQmail QMQP from:#{@return_path} exited:#{@success} responded:#{response}")
+        @success
+#     rescue Exception => e
+#       @options[:logger].error( "QMQP can not connect to #{@opt[:qmqp_ip]}:#{@options[:qmqp_port]} #{e}" )
+#       raise e
+#     ensure
+#       socket.close if socket
+#     end
+    end
+    
+    # # Like #qmail_queue, but writes directly to the queue, not via the qmail-queue program
+    # # Is this a good idea? It expects a unique PID per message.
+    # def qmail_queue_direct(return_path=nil, recipients=nil, message=nil, *options)
+    #   parameters(return_path, recipients, message, options)
+    # end
+
+    # def sendmail(return_path=nil, recipients=nil, message=nil, *options)
+    #   parameters(return_path, recipients, message, options)
+    # end
+
+    # Sends email directly via qmail-remote. It does not store in the queue, It will halt the process
+    # and wait for the network event to complete. If multiple recipients are passed, it will run
+    # qmail-remote delivery for each at a time to honor VERP return paths.
+    def qmail_remote(return_path=nil, recipients=nil, message=nil, *options)
+      parameters(return_path, recipients, message, options)
+      @recipients.each do |recip|
+        mailbox, host = recip.split(/@/)
+        rp1, rp2 = @return_path.split(/@/)
+        verp = (rp1.ends_with?('-') ? rp1 : rp1+'-') + mailbox + '=' + host + '@' + rp2
+        @message.rewind if @message.respond_to?(:rewind)
+        cmd = "#{@options[:qmail_base]}+/bin/qmail-remote #{host} #{verp} #{recip}"
+        @success = self.spawn_command(cmd) do |send, recv|
+          @message.each { |m| send.puts m }
+          @response = recv.readpartial(1000)
+        end
+        @options[:logger].info("RubyQmail Remote #{recip} exited:#{@success} responded:#{@response}")
       end
+      return [ @success, @response ] # Last one
     end
-    
-  end
-  
-  # Like #qmail_queue, but writes directly to the queue, not via the qmail-queue program
-  # Is this a good idea? It expects a unique PID per message.
-  def qmail_queue_direct(return_path=nil, recipients=nil, message=nil, *options)
-    parameters(return_path, recipients, message, options)
-  end
-  
-  # Sends email directly via qmail-remote. It does not store in the queue, It will halt the process
-  # and wait for the network event to complete. If multiple recipients are passed, it will run
-  # qmail-remote delivery for each at a time to honor VERP return paths.
-  def qmail_remote(return_path=nil, recipients=nil, message=nil, *options)
-    parameters(return_path, recipients, message, options)
-    @recipients.each do |recip|
-      mailbox, host = recip.split(/@/)
-      rp1, rp2 = @return_path.split(/@/)
-      verp = (rp1.ends_with?('-') ? rp1 : rp1+'-') + mailbox + '=' + host + '@' + rp2
-      @message.rewind if @message.respond_to?(:rewind)
-      cmd = "#{@options[:qmail_base]}+/bin/qmail-remote #{host} #{verp} #{recip}"
-      @success = self.spawn_command(cmd) do |send, recv|
-        @message.each { |m| send.puts m }
-        @response = recv.readpartial(1000)
+        
+    # Forks, sets up stdin and stdout pipes, and starts the command. 
+    # IF a block is passed, yeilds to it with [sendpipe, receivepipe], 
+    # returing the exit code, otherwise returns {:send=>, :recieve=>, :pid=>}
+    # qmail-queue does not work with this as it reads from both pipes.
+    def spawn_command(command, &block)
+      child_read, parent_write = IO.pipe # From parent to child(stdin)
+      parent_read, child_write = IO.pipe # From child(stdout) to parent
+      @child = fork
+
+      # Child process
+      unless @child # 
+        $stdin.close # closes FD==0
+        child_read.dup # copies to FD==0
+        child_read.close
+        
+        $stdout.close # closes FD==1
+        child_write.dup # copies to FD==1
+        child_write.close
+
+        Dir.chdir(@options[:qmail_base]) unless @options[:nochdir]
+        exec(command)
+        raise "Exec spawn_command #{command} failed"
       end
-      @options[:logger].info("RubyQmail Remote #{recip} exited:#{@success} responded:#{@response}")
-    end
-    return [ @success, @response ] # Last one
-  end
       
-  # Forks, sets up stdin and stdout pipes, and starts the command. 
-  # IF a block is passed, yeilds to it with [sendpipe, receivepipe], 
-  # returing the exit code, otherwise returns {:send=>, :recieve=>, :pid=>}
-  # qmail-queue does not work with this as it reads from both pipes.
-  def self.spawn_command(command, &block)
-    child_read, parent_write = IO.pipe # From parent to child(stdin)
-    parent_read, child_write = IO.pipe # From child(stdout) to parent
-    @child = fork
-
-    # Child process
-    unless @child # 
-      $stdin.close # closes FD==0
-      child_read.dup # copies to FD==0
-      child_read.close
+      # Parent Process with block
+      if block_given?
+        yield(parent_write, parent_read)
+        parent_write.close
+        parent_read.close
+        wait(@child)
+        @success = $? >> 8
+        return @sucess
+      end
       
-      $stdout.close # closes FD==1
-      child_write.dup # copies to FD==1
-      child_write.close
-
-      Dir.chdir(@options[:qmail_base]) unless @options[:nochdir]
-      exec(command)
-      raise "Exec spawn_command #{command} failed"
-    end
-    
-    # Parent Process with block
-    if block_given?
-      yield(parent_write, parent_read)
-      parent_write.close
-      parent_read.close
-      wait(@child)
-      @success = $? >> 8
-      return @sucess
-    end
-    
-    # Parent process, no block
-    {:send=>parent_write, :receive=>parent_read, :pid=>@child}
-  end
-
-  # Forks, sets up stdin and stdout pipes, and starts qmail-queue. 
-  # IF a block is passed, yields to it with [sendpipe, receivepipe], 
-  # and returns the exist cod, otherwise returns {:msg=>pipe, :env=>pipe, :pid=>@child}
-  # It exits 0 on success or another code on failure. 
-  # Qmail-queue Protocol: Reads mail message from File Descriptor 0, then reads Envelope from FD 1
-  # Envelope Stream: 'F' + sender_email + "\0" + ("T" + recipient_email + "\0") ... + "\0"
-  def self.run_qmail_queue(&block)
-    # Set up pipes and qmail-queue child process
-    msg_read, msg_write = IO.pipe
-    env_read, env_write = IO.pipe
-    @child=fork # child? nil : childs_process_id
-
-    unless @child 
-      ## Set child's stdin(0) to read from msg
-      $stdin.close # FD=0
-      msg_read.dup
-      msg_read.close
-      msg_write.close
-
-      ## Set child's stdout(1) to read from env
-      $stdout.close # FD=1
-      env_read.dup
-      env_read.close
-      env_write.close
-
-      # Change directory and load command
-      Dir.chdir(@options[:qmail_base])
-      exec(@options[:qmail_queue])
-      raise "Exec qmail-queue failed"
+      # Parent process, no block
+      {:send=>parent_write, :receive=>parent_read, :pid=>@child}
     end
 
-    # Parent Process with block
-    if block_given?
-      yield(msg_write, env_write)
-      msg_write.close
-      env_write.close
-      wait(@child)
-      @success = $? >> 8
-      return @sucess
+    # Forks, sets up stdin and stdout pipes, and starts qmail-queue. 
+    # IF a block is passed, yields to it with [sendpipe, receivepipe], 
+    # and returns the exist cod, otherwise returns {:msg=>pipe, :env=>pipe, :pid=>@child}
+    # It exits 0 on success or another code on failure. 
+    # Qmail-queue Protocol: Reads mail message from File Descriptor 0, then reads Envelope from FD 1
+    # Envelope Stream: 'F' + sender_email + "\0" + ("T" + recipient_email + "\0") ... + "\0"
+    def run_qmail_queue(command=nil, &block)
+      # Set up pipes and qmail-queue child process
+      msg_read, msg_write = IO.pipe
+      env_read, env_write = IO.pipe
+      @child=fork # child? nil : childs_process_id
+
+      unless @child 
+        ## Set child's stdin(0) to read from msg
+        $stdin.close # FD=0
+        msg_read.dup
+        msg_read.close
+        msg_write.close
+
+        ## Set child's stdout(1) to read from env
+        $stdout.close # FD=1
+        env_read.dup
+        env_read.close
+        env_write.close
+
+        # Change directory and load command
+        Dir.chdir(@options[:qmail_root])
+        exec( command || @options[:qmail_queue] )
+        raise "Exec qmail-queue failed"
+      end
+
+      # Parent Process with block
+      if block_given?
+        yield(msg_write, env_write)
+      # msg_write.close
+        env_write.close
+        wait(@child)
+        @success = $? >> 8
+        # puts "#{$$} parent waited for #{@child} s=#{@success} #{$?.inspect}"
+        return @sucess
+      end
+      
+      # Parent process, no block
+      {:msg=>msg_write, :env=>env_write, :pid=>@child}
     end
-    
-    # Parent process, no block
-    {:msg=>msg_write, :env=>env_write, :pid=>@child}
+
   end
 
 end
