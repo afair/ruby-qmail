@@ -1,4 +1,6 @@
 require File.expand_path(File.dirname(__FILE__) + '/spec_helper')
+require 'rubygems'
+require 'ruby-debug'
 
 describe "RubyQmail" do
 
@@ -19,12 +21,12 @@ later!
     "qmail".to_netstring.should == "5:qmail,"
   end
 
-  # it "should submit a message by qmail-queue" do
-  #   @rqq.queue( @rpath, @recip, @msg ).should_be true
-  # end
+  it "should submit a message by qmail-queue" do
+    @rqq.queue( @rpath, @recip, @msg ).should_equal true
+  end
 
   it "should submit a message by QMQP" do
-    @rqq.qmqp( @rpath, @recip, @msg, :ip=>'173.161.130.227', :qmqp_port=>631 ).should_be true
+    @rqq.qmqp( @rpath, @recip, @msg, :ip=>'173.161.130.227', :qmqp_port=>631 ).should_equal true
   end
 
 

@@ -7,6 +7,7 @@ module RubyQmail
     DEFAULTS = {
       :qmqp_port => 628,
       :qmail_root => '/var/qmail',
+      :delimiter => '-',
       :logger    => Logger.new("#{ENV['HOME']}/logs/ruby-qmail.log")
     }
     QMQP_SERVERS = '/control/qmqpservers'
@@ -15,7 +16,7 @@ module RubyQmail
     def self.load_file(config_file, options={})
       @options = DEFAULTS.merge(options)
       if config_file && File.exists?(config_file)
-        @options = YAML.load_file(@config_file).merge(@options)
+        @options = YAML.load_file(config_file).merge(@options)
       end
       @options[:qmail_queue] ||= @options[:qmail_root] + QMAIL_QUEUE
       @options[:qmqp_servers] ||= @options[:qmail_root] + QMQP_SERVERS

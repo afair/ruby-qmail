@@ -30,8 +30,13 @@ module RubyQmail
     }
     
     # Class Method to place the message into the Qmail queue.
-    def self.enqueue(return_path, recipients, message, *options)
-      QueueBase.new(return_path, recipients, message, *options).qmail_queue
+    def self.insert(return_path, recipients, message, *options)
+      q = Queue.new(return_path, recipients, message, *options)
+      if q.options.has_key?[:ip] || q.options[:method]==:qmqp 
+        q.qmqp
+      else
+        q.qmail_queue
+      end
     end
     
     # Recipients can be a filename, array or other object that responds to :each, or #to_s resolves to an email address
@@ -49,6 +54,13 @@ module RubyQmail
       @message     = message if message
       @message     = File.new(@message) if @message.is_a?(String) && File.exists?(@message)
       @message     = @message.split(/\n/) if @message.is_a?(String)
+
+      # Edits the return path for VERP. bounces@example.com => bounces-@example.com-@[]
+      if return_path && !@options.has_key?(:noverp)
+        rp1, rp2 = return_path.split(/@/)
+        @return_path = "#{rp1}#{@options[:delimiter]}@#{rp2}" if (rp1.match(/(.)$/)[1] != @options[:delimiter])
+        @return_path += '-@[]' unless @return_path =~ /-@\[\]$/
+      end
     end
     
     # This calls the Qmail-Queue program, so requires qmail to be installed (does not require it to be currently running).
@@ -56,15 +68,10 @@ module RubyQmail
       parameters(return_path, recipients, message, options)
       @success = run_qmail_queue() do |msg, env|
         # Send the Message
-        # @message.each { |m| puts("MSG: #{m}") }
         @message.each { |m| msg.puts(m) }
         msg.close
 
-        # Send the Envelope. Return paths ending with -@[] flag qmail to use VERP.
-        @return_path += '-@[]' unless @options.has_key?(:noverp) || @return_path.match(/-@\[\]$/) # VERP-ify
         env.write('F' + @return_path + "\0")
-        # puts('ENV: F' + @return_path + "0")
-        # @recipients.each { |r| puts('ENV: T' + r + "0") }      
         @recipients.each { |r| env.write('T' + r + "\0") }      
         env.write("\0") # End of "file"
       end
@@ -85,40 +92,35 @@ module RubyQmail
     def qmqp(return_path=nil, recipients=nil, message=nil, *options)
       parameters(return_path, recipients, message, options)
       
-#     begin
+      begin
         ip = @options[:ip] || File.readlines(QMQP_SERVERS).first.chomp
-        puts "CONNECT #{@options[:ip]}, #{@options[:qmqp_port]}"
-        socket = TCPSocket.new(@options[:ip], @options[:qmqp_port])
-        raise "QMQP can not connect to #{@opt[:qmqp_ip]}:#{@options[:qmqp_port]}" unless socket
+        #puts "CONNECT #{:ip}, #{@options[:qmqp_port]}"
+        socket = TCPSocket.new(ip, @options[:qmqp_port])
+        raise "QMQP can not connect to #{ip}:#{@options[:qmqp_port]}" unless socket
         
-        nstr = @message.each { |m| m }.join("\t").to_netstring
-        nstr += "F#{@return_path}".to_netstring
-        nstr += @recipients.each { |r| "T#{r}".to_netstring }.join
+        # Build netstring of messagebody+returnpath+recipient...
+        nstr = (@message.map.join("\n")+"\n").to_netstring # { |m| m }.join("\t").to_netstring
+        nstr += @return_path.to_netstring
+        nstr += @recipients.map { |r| r.to_netstring }.join
         socket.send( nstr.to_netstring, 0 )
-        puts( nstr.to_netstring )
 
-        @response = socket.recv(1000) # "23:Kok 1182362995 qp 21894,"
-        socket.close
-        @options[:logger].info("RubyQmail QMQP [#{@options[:qmqp_ip]}:#{@options[:qmqp_port]}]: #{@response}")
-        
-        if @response =~ /^\d+:([KZD])(.+),$/
-          @options[:logger].debug("QMQP #{@return_path} to #{@recipient_count} recipients including #{@last_recipient}: #{$1+$2}")
-        end
-        @success = case $1
+        @response = socket.recv(1000) # "23:Kok 1182362995 qp 21894," (its a netstring)
+        @success = case @response.match(/^\d+:([KZD])(.+),$/)[1]
           when 'K' : true  # success
           when 'Z' : nil   # deferral
           when 'D' : false # failure
           else false
         end
-        @options[:logger].info("RubyQmail QMQP from:#{@return_path} exited:#{@success} responded:#{response}")
-        puts("RubyQmail QMQP from:#{@return_path} exited:#{@success} responded:#{response}")
+        logmsg = "RubyQmail QMQP [#{ip}:#{@options[:qmqp_port]}]: #{@response} return:#{@success}"
+        @options[:logger].info(logmsg)
+        puts logmsg
         @success
-#     rescue Exception => e
-#       @options[:logger].error( "QMQP can not connect to #{@opt[:qmqp_ip]}:#{@options[:qmqp_port]} #{e}" )
-#       raise e
-#     ensure
-#       socket.close if socket
-#     end
+      rescue Exception => e
+        @options[:logger].error( "QMQP can not connect to #{@opt[:qmqp_ip]}:#{@options[:qmqp_port]} #{e}" )
+        raise e
+      ensure
+        socket.close if socket
+      end
     end
     
     # # Like #qmail_queue, but writes directly to the queue, not via the qmail-queue program
@@ -136,16 +138,22 @@ module RubyQmail
     # qmail-remote delivery for each at a time to honor VERP return paths.
     def qmail_remote(return_path=nil, recipients=nil, message=nil, *options)
       parameters(return_path, recipients, message, options)
+      rp1, rp2 = @return_path.split(/@/,2)
+      rp = @return_path
       @recipients.each do |recip|
-        mailbox, host = recip.split(/@/)
-        rp1, rp2 = @return_path.split(/@/)
-        verp = (rp1.ends_with?('-') ? rp1 : rp1+'-') + mailbox + '=' + host + '@' + rp2
+        unless @options[:noverp]
+          mailbox, host = recip.split(/@/)
+          rp = "#{rp1}#{mailbox}=#{host}@#{rp2}"
+        end
+
         @message.rewind if @message.respond_to?(:rewind)
-        cmd = "#{@options[:qmail_base]}+/bin/qmail-remote #{host} #{verp} #{recip}"
+        cmd = "#{@options[:qmail_root]}+/bin/qmail-remote #{host} #{rp} #{recip}"
         @success = self.spawn_command(cmd) do |send, recv|
           @message.each { |m| send.puts m }
+          send.close
           @response = recv.readpartial(1000)
         end
+
         @options[:logger].info("RubyQmail Remote #{recip} exited:#{@success} responded:#{@response}")
       end
       return [ @success, @response ] # Last one
@@ -170,7 +178,7 @@ module RubyQmail
         child_write.dup # copies to FD==1
         child_write.close
 
-        Dir.chdir(@options[:qmail_base]) unless @options[:nochdir]
+        Dir.chdir(@options[:qmail_root]) unless @options[:nochdir]
         exec(command)
         raise "Exec spawn_command #{command} failed"
       end

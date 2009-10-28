@@ -5,6 +5,51 @@ While initially intended to operate in a large-scale Qmail environment, some of 
 applications on other platforms. In fact, this plugin is not required if you are using Qmail because
 ActionMailer's sendmail and smtp configurations will work for simple Qmail installations.
 
+NOTE: This is still in an early stage of development, but has been tested to insert email into the qmail queue
+via the qmail-queue and QMQP protocols.
+
+== Using ruby-qmail
+
+Ruby Qmail takes a message in 3 parts
+* The envelope return path. This is not necessarily the same as the From: header, and is the email address to which
+  bounces will be sent. This should most likely be a special address used to identify the mailing being sent, 
+  containing the message number or other identifier, and perhaps the source of the message.  For example:
+   bounces-messageid@example.com
+  Ruby-Qmail used VERP (Variable Envelope Return Path) by default, so bounces will be returned in the form
+   bounces-messageid-recipientmailbox=recipientdomain@example.com
+  for individual returns. Qmail will also send a report to the return path (without the recipient address encoded) 
+   bounces-messageid-@example.com
+  with addresses and error messages for all undeliverable addresses.
+* Recipient List. This is either a String containing an email address (only the user@domain part), an array of
+  email addresses, or a file of email addresses (one per line), or any other object implementing Enumerable.
+* Message Data. This is a String or Filename of a raw RFC822 message, with full message headers, body parts and 
+  attachments, ususally composed via Tmail or Rmail.
+
+Call the insert command
+  RubyQmail::Queue.insert "bounces-123@example.com", ['recipient@email.com',...], message_file
+The call returns true if the message was inserted. If you want more control and information, you can run it as:
+  rqq = RubyQmail::Queue.new 
+  sucess? = rqq.qmail_queue "bounces-123@example.com", ['recipient@email.com',...], message_file
+  puts rqq.response   #=> Response message
+
+You can also specify a set of options on the invocation line as :name=>value parameters after the message file.
+  RubyQmail::Queue.insert "bounces-123@example.com", recipient_file, message_file, :method=>:qmqp
+Options can be
+* :config_file - Location of the YAML file with these config settings for the application/system.
+* :qmail_root - Location of the qmail install, usually /var/qmail
+* :qmqp_port - Where any QMQP daemon process is listening, usually 628
+* :logger - Object used to log any messages, such as RAILS_DEFAULT_LOGGER
+* :qmail_queue - The name of the qmail-queue binary (qmail-queue or qmail-qmqpc or other).
+* :qmqp_servers - The location of the time used to specify the IP address of a QMQPD process
+* :ip - The IP address of a QMQP server
+* :method - either :qmqp or :queue, used on the #insert method
+* :noverp - Do not use VERP encoding on the return path
+* :delimiter - Character to separate the email address and VERP encoding (Qmail prefers '-', others user '+')
+
+== Feature Path
+* Queue management, moving, reporting
+* Bounce handling
+
 == Note on Patches/Pull Requests
  
 * Fork the project.
