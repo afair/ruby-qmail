@@ -5,8 +5,8 @@ begin
   require 'jeweler'
   Jeweler::Tasks.new do |gem|
     gem.name = "ruby-qmail"
-    gem.summary = %Q{TODO: one-line summary of your gem}
-    gem.description = %Q{TODO: longer description of your gem}
+    gem.summary = %Q{A Ruby Qmail library to insert email directly into Qmail}
+    gem.description = %Q{A Ruby Qmail library to insert email directly into Qmail}
     gem.email = "allen.fair@gmail.com"
     gem.homepage = "http://github.com/afair/ruby-qmail"
     gem.authors = ["Allen Fair"]
