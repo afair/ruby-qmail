@@ -106,9 +106,9 @@ module RubyQmail
 
         @response = socket.recv(1000) # "23:Kok 1182362995 qp 21894," (its a netstring)
         @success = case @response.match(/^\d+:([KZD])(.+),$/)[1]
-          when 'K' : true  # success
-          when 'Z' : nil   # deferral
-          when 'D' : false # failure
+          when 'K' then true  # success
+          when 'Z' then nil   # deferral
+          when 'D' then false # failure
           else false
         end
         logmsg = "RubyQmail QMQP [#{ip}:#{@options[:qmqp_port]}]: #{@response} return:#{@success}"
