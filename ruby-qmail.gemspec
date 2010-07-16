@@ -10,7 +10,7 @@ Gem::Specification.new do |s|
   s.required_rubygems_version = Gem::Requirement.new(">= 0") if s.respond_to? :required_rubygems_version=
   s.authors = ["Allen Fair"]
   s.date = %q{2010-07-16}
-  s.description = %q{A Ruby Qmail library to insert email directly into Qmail!}
+  s.description = %q{A Ruby Qmail library to insert email directly into Qmail}
   s.email = %q{allen.fair@gmail.com}
   s.extra_rdoc_files = [
     "LICENSE",
